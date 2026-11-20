@@ -36,8 +36,9 @@ body{
 .hero::after{
   content:"";position:absolute;right:-40px;top:-56px;width:190px;height:190px;border-radius:50%;
   background:radial-gradient(circle at 35% 35%,rgba(255,215,140,.34),rgba(255,215,140,0) 68%);
+  pointer-events:none;
 }
-.hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;position:relative}
+.hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;position:relative;z-index:1}
 .badge{
   display:inline-flex;align-items:center;gap:6px;font-size:12px;letter-spacing:.14em;
   color:var(--gold-l);border:1px solid rgba(232,207,148,.55);border-radius:999px;padding:3px 11px;
@@ -140,7 +141,7 @@ h2.s{font-size:16px;margin:0 0 10px;letter-spacing:.02em}
         <h1>入党积极分子 · 刷题</h1>
         <p>填空题 · 单选题 · 多选题 · 判断题　共 <b id="totalNum">0</b> 题</p>
       </div>
-      <button class="mini" id="themeBtn" type="button">🌙 夜间</button>
+      <button class="mini" id="themeBtn" type="button" onclick="toggleTheme()">🌙 夜间</button>
     </div>
   </header>
 
@@ -698,12 +699,14 @@ function applyTheme(){
   const night = store.theme === "night";
   document.body.classList.toggle("night", night);
   document.documentElement.style.colorScheme = night ? "dark" : "light";
-  document.getElementById("themeBtn").textContent = night ? "☀️ 日间" : "🌙 夜间";
+  const btn = document.getElementById("themeBtn");
+  if(btn) btn.textContent = night ? "☀️ 日间" : "🌙 夜间";
 }
-document.getElementById("themeBtn").addEventListener("click", ()=>{
+function toggleTheme(){
   store.theme = store.theme === "night" ? "day" : "night";
-  persist(); applyTheme();
-});
+  persist();
+  applyTheme();
+}
 
 /* ---------------- boot ---------------- */
 document.addEventListener("keydown", e=>{
