@@ -167,14 +167,8 @@ h2.s{font-size:16px;margin:0 0 10px;letter-spacing:.02em}
       <input id="importFile" type="file" accept="application/json" hidden>
     </div>
     <div class="divider"></div>
-    <h2 class="s">多端同步</h2>
-    <div id="syncStatus" class="hint">未开启</div>
-    <div class="toolbar" style="margin-top:9px">
-      <button class="btn" onclick="UI.syncPanel()">☁️ 设置同步</button>
-      <button class="btn" onclick="Sync.sync(true)">立即同步</button>
-    </div>
     <p class="hint" style="margin:12px 0 0">
-      记录保存在当前浏览器（localStorage），换设备或清缓存会丢失。开了同步之后，多端会在后台自动合并，断网也能继续刷。
+      记录保存在当前浏览器（localStorage），清理浏览器数据或更换设备可能丢失，建议定期导出备份。
       填空题点“查看答案”后自己判断对错；多选题需全部选对才计分。
     </p>
   </section>
@@ -196,29 +190,13 @@ const KEYS = ["fill","single","multi","judge","quiz"];
 const LS = "rudang_quiz_v1";
 
 /* ---------------- storage ---------------- */
-let store = {db:{}, cursor:{}, unlocked:{}, theme:"day",
-  sync:{url:"", code:"", dev:"", lastRev:0, lastSync:0, seq:0, queue:[], seen:{}, backfilledFor:""}};
+let store = {db:{}, cursor:{}, unlocked:{}, theme:"day"};
 try{
   const raw = JSON.parse(localStorage.getItem(LS) || "null");
   if(raw && typeof raw === "object"){
     store.db = raw.db || {};
     store.cursor = raw.cursor || {};
-    store.unlocked = raw.unlocked || {};
     store.theme = raw.theme === "night" ? "night" : "day";
-    if(raw.sync && typeof raw.sync === "object"){
-      const s = raw.sync;
-      store.sync = {
-        url: typeof s.url === "string" ? s.url : "",
-        code: typeof s.code === "string" ? s.code : "",
-        dev: typeof s.dev === "string" ? s.dev : "",
-        lastRev: Number(s.lastRev) || 0,
-        lastSync: Number(s.lastSync) || 0,
-        seq: Number(s.seq) || 0,
-        queue: Array.isArray(s.queue) ? s.queue : [],
-        seen: s.seen && typeof s.seen === "object" ? s.seen : {},
-        backfilledFor: typeof s.backfilledFor === "string" ? s.backfilledFor : "",
-      };
-    }
   }
 }catch(e){}
 function persist(){
@@ -241,7 +219,6 @@ function recordAnswer(q, ok, pick){
   }
   r.last = pick || "";
   persist();
-  Sync.emit(qId(q), ok, pick);
 }
 
 /* ---------------- current bank ---------------- */
@@ -295,7 +272,7 @@ UI.home = function(){
   const done = b.filter(q => (store.db[qId(q)]||{}).a).length;
   document.querySelector("#homePane h2.s").textContent =
     `开始刷题 · 当前题库：${TYPE_LABEL[curBank]}（已练 ${done}/${b.length}）`;
-  if(typeof Sync !== "undefined") Sync.renderStatus();
+  document.querySelector("#homePane").scrollIntoView({block:"nearest"});
   document.querySelector("#homePane").scrollIntoView({block:"nearest"});
 };
 
@@ -309,10 +286,17 @@ function shuffle(a){
   return a;
 }
 function pane(){ return document.getElementById("mainPane"); }
-function showMain(html){
+/* keepScroll=true 用于“同一道题重新渲染”（提交答案、查看答案），
+   这样页面不会跳回顶部；切换到新题目时才回到顶部。 */
+function showMain(html, keepScroll){
+  const y = window.pageYOffset || document.documentElement.scrollTop || 0;
   document.getElementById("homePane").hidden = true;
   const p = pane(); p.hidden = false; p.innerHTML = html;
-  window.scrollTo({top:0, behavior:"smooth"});
+  if(keepScroll){
+    window.scrollTo(0, y);
+  }else{
+    window.scrollTo({top:0, behavior:"smooth"});
+  }
 }
 function normalize(s){
   return String(s).toLowerCase().replace(/[\s，,。.、；;：:！!？?“”"'‘’（）()《》〈〉\-—]/g,"");
@@ -334,13 +318,14 @@ const Study = {
     this.mode = mode;
     this.queue = qs;
     this.pos = 0;
+    this._current = null;      // 新一轮练习：重置当前题状态
     if(resume && mode === "order"){
       this.pos = Math.min(Math.max(0, store.cursor[curBank] || 0), qs.length-1);
     }
     this.render();
   },
 
-  render(){
+  render(keepScroll){
     if(!this.queue.length){ showMain(`<div class="empty">暂无题目</div>`); return; }
     if(this.pos >= this.queue.length){
       const total = this.queue.length;
@@ -363,7 +348,7 @@ const Study = {
     if(this._current !== id){
       this._current = id;
       this.picked = [];
-      this.revealed = !!store.unlocked[id];
+      this.revealed = false;   // 每次都从“隐藏答案”开始，点“查看答案”才显示
       this.judged = false;
     }
     const isFill = q.t === "fill";
@@ -429,7 +414,7 @@ const Study = {
         <button class="btn" onclick="Study.jump()">跳转</button>
         <button class="btn ghost" onclick="UI.home()">退出</button>
       </div>
-    </div>`);
+    </div>`, keepScroll);
   },
 
   go(d){
@@ -466,17 +451,15 @@ const Study = {
     if(noKey){
       // practice items carry no answer key in the source material: ask for self-assessment
       this.revealed = true;
-      this.render();
+      this.render(true);
       return;
     }
     const correct = this.picked.slice().sort().join("") === q.a.split("").sort().join("");
     this.answer(q, correct);
   },
   reveal(){
-    const q = this.queue[this.pos];
-    store.unlocked[qId(q)] = true; persist();
     this.revealed = true;
-    this.render();
+    this.render(true);
   },
   selfJudge(ok){
     const q = this.queue[this.pos];
@@ -486,7 +469,7 @@ const Study = {
     recordAnswer(q, correct, this.picked.join(""));
     this.revealed = true;
     this.judged = true;
-    this.render();
+    this.render(true);
   },
   feedback(q){
     const noKey = !q.a || (Array.isArray(q.a) && !q.a.length) || q.t === "quiz";
@@ -545,7 +528,7 @@ const Exam = {
     this.pos = 0; this.picked = []; this.done = false;
     this.render();
   },
-  render(){
+  render(keepScroll){
     if(!this.list.length){ UI.home(); return; }
     if(this.pos >= this.list.length) return this.result();
     const {q} = this.list[this.pos];
@@ -571,14 +554,14 @@ const Exam = {
         <span class="grow"></span>
         <button class="btn ghost" onclick="if(confirm('确定退出考试？'))UI.home()">退出</button>
       </div>
-    </div>`);
+    </div>`, keepScroll);
   },
   pick(L){
     const {q} = this.list[this.pos];
     if(q.t === "multi"){
       this.picked = this.picked.includes(L) ? this.picked.filter(x=>x!==L) : [...this.picked,L].sort();
     }else this.picked = [L];
-    this.render();
+    this.render(true);
   },
   go(d){
     this.list[this.pos].picked = this.picked.slice();
@@ -686,6 +669,7 @@ Study.reviewOne = function(id){
   this.mode = "single-review";
   this.queue = [q];
   this.pos = 0;
+  this._current = null;      // 重做是一轮新的练习：答案要重新隐藏
   this.render();
 };
 
@@ -723,252 +707,6 @@ document.getElementById("importFile").addEventListener("change", function(e){
   e.target.value = "";
 });
 
-/* ---------------- cross-device sync ---------------- */
-const Sync = {
-  timer: null,
-  busy: false,
-  lastError: "",
-
-  cfg(){ return store.sync; },
-  on(){ return !!(store.sync.url && store.sync.code); },
-
-  ensureDev(){
-    if(!store.sync.dev){
-      store.sync.dev = "d" + Math.random().toString(36).slice(2, 8);
-      persist();
-    }
-    return store.sync.dev;
-  },
-
-  newCode(){
-    const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
-    let s = "";
-    for(let i = 0; i < 10; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
-    return s;
-  },
-
-  // called for every answer; only records an event when sync is configured
-  emit(qid, ok, pick){
-    if(!this.on()) return;
-    const dev = this.ensureDev();
-    this.pushEvent(dev, qid, ok, pick);
-    persist();
-    this.schedule(1500);
-  },
-
-  pushEvent(dev, qid, ok, pick){
-    store.sync.seq = (store.sync.seq || 0) + 1;
-    const ev = { id: dev + ":" + store.sync.seq, qid, dev, ts: Date.now(), ok: ok ? 1 : 0, pick: pick || "" };
-    store.sync.queue.push(ev);
-    store.sync.seen[ev.id] = 1;
-    this.trimSeen();
-    return ev;
-  },
-
-  /* 开启同步之前就已经做过的题，不会自然产生事件。
-     第一次为某个同步码同步时，把它们按统计量补成事件上传，否则另一台设备看不到。 */
-  backfill(){
-    if(!this.on()) return 0;
-    if(store.sync.backfilledFor === store.sync.code) return 0;
-    const dev = this.ensureDev();
-    let n = 0;
-    for(const qid of Object.keys(store.db)){
-      const r = store.db[qid];
-      if(!r) continue;
-      const right = r.c || 0, wrong = r.w || 0;
-      if(!right && !wrong) continue;
-      const wrongs = () => { for(let i = 0; i < wrong; i++) { this.pushEvent(dev, qid, false, ""); n++; } };
-      const rights = () => {
-        for(let i = 0; i < right; i++) { this.pushEvent(dev, qid, true, i === 0 ? (r.last || "") : ""); n++; }
-      };
-      // keep the final "mastered" flag consistent: wrongs first when it should end up mastered
-      if(r.master){ wrongs(); rights(); } else { rights(); wrongs(); }
-    }
-    store.sync.backfilledFor = store.sync.code;
-    persist();
-    return n;
-  },
-
-  trimSeen(){
-    const keys = Object.keys(store.sync.seen);
-    if(keys.length > 15000){
-      const drop = keys.slice(0, keys.length - 12000);
-      drop.forEach(k => delete store.sync.seen[k]);
-    }
-  },
-
-  // debounce so a burst of answers becomes one request
-  schedule(ms){
-    if(this._pending) clearTimeout(this._pending);
-    this._pending = setTimeout(() => { this._pending = null; this.sync(); }, ms || 2000);
-  },
-
-  async sync(manual){
-    if(!this.on()){ if(manual) this.renderStatus("还没配置同步"); return; }
-    if(this.busy) return;
-    this.busy = true;
-    this.renderStatus(this.cfg().lastSync ? "同步中…" : "首次同步中…");
-    const dev = this.ensureDev();
-    const url = store.sync.url.replace(/\/+$/, "") + "/api/sync";
-    try{
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code: store.sync.code,
-          dev,
-          since: store.sync.lastRev || 0,
-          events: store.sync.queue.slice(0, 500),
-        }),
-      });
-      if(!res.ok){
-        let msg = "HTTP " + res.status;
-        try{ const j = await res.json(); if(j && j.error) msg = j.error; }catch(e){}
-        throw new Error(msg);
-      }
-      const data = await res.json();
-      // our own events are already applied locally, so drop them from the queue
-      store.sync.queue = [];
-      let applied = 0;
-      for(const ev of (data.events || [])) applied += this.applyRemote(ev);
-      if(typeof data.rev === "number" && data.rev > (store.sync.lastRev || 0)) store.sync.lastRev = data.rev;
-      store.sync.lastSync = Date.now();
-      this.lastError = "";
-      persist();
-      this.renderStatus();
-      if(applied > 0 && !document.getElementById("homePane").hidden){ renderStats(); UI.home(); }
-    }catch(e){
-      this.lastError = String(e && e.message ? e.message : e);
-      this.renderStatus();
-    }finally{
-      this.busy = false;
-    }
-  },
-
-  applyRemote(ev){
-    if(!ev || !ev.id || !ev.qid) return 0;
-    if(store.sync.seen[ev.id]) return 0;
-    store.sync.seen[ev.id] = 1;
-    const r = store.db[ev.qid] || (store.db[ev.qid] = {a:0, w:0, c:0, master:false});
-    r.a += 1;
-    if(ev.ok){ r.c += 1; if(r.w > 0) r.master = true; }
-    else { r.w += 1; r.master = false; }
-    if(ev.pick) r.last = ev.pick;
-    this.trimSeen();
-    return 1;
-  },
-
-  start(){
-    if(this.timer) clearInterval(this.timer);
-    if(!this.on()) return;
-    this.timer = setInterval(() => {
-      if(document.visibilityState === "visible") this.sync();
-    }, 30000);
-  },
-
-  stop(){
-    if(this.timer){ clearInterval(this.timer); this.timer = null; }
-  },
-
-  renderStatus(override){
-    const el = document.getElementById("syncStatus");
-    if(!el) return;
-    if(override){ el.textContent = override; return; }
-    if(!this.on()){ el.textContent = "未开启：填好服务器地址和同步码后即可在多端自动同步"; return; }
-    if(this.lastError){ el.textContent = "同步失败：" + this.lastError + "（本地记录不受影响，会自动重试）"; return; }
-    const t = store.sync.lastSync;
-    if(!t){ el.textContent = "尚未同步，点「立即同步」试一下"; return; }
-    const d = new Date(t);
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    el.textContent = "已同步（" + hh + ":" + mm + "）· 待上传 " + store.sync.queue.length + " 条";
-  },
-};
-
-UI.syncPanel = function(){
-  const s = store.sync;
-  showMain(`<div class="panel">
-    <h2 class="s">☁️ 多端同步</h2>
-    <p class="hint">填一次就行。另一台设备填<b>同样的服务器地址和同步码</b>，两边的做题记录就会自动合并。</p>
-    <div style="margin-top:14px">
-      <label class="hint" for="syncUrl">服务器地址（Worker 地址）</label>
-      <input id="syncUrl" type="text" inputmode="url" placeholder="https://rudang-sync.你的账号.workers.dev"
-             value="${esc(s.url)}"
-             style="width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:11px;background:var(--card);color:var(--ink);font-family:inherit;font-size:15px;margin-top:5px">
-    </div>
-    <div style="margin-top:13px">
-      <label class="hint" for="syncCode">同步码</label>
-      <div style="display:flex;gap:8px;margin-top:5px">
-        <input id="syncCode" type="text" placeholder="自己起一个，比如 dangke2026"
-               value="${esc(s.code)}"
-               style="flex:1;padding:11px 13px;border:1px solid var(--line);border-radius:11px;background:var(--card);color:var(--ink);font-family:inherit;font-size:15px">
-        <button class="btn" onclick="UI.fillRandomCode()">随机生成</button>
-      </div>
-      <p class="hint" style="margin:6px 0 0">同步码就是钥匙：拿到码的人能读写这份记录，所以别用 123456 这种。</p>
-    </div>
-    <div class="toolbar" style="margin-top:16px">
-      <button class="btn primary" onclick="UI.saveSync()">保存并同步</button>
-      <button class="btn" onclick="UI.quitSync()">关闭同步</button>
-      <button class="btn ghost" onclick="UI.home()">返回</button>
-    </div>
-    <div class="divider"></div>
-    <div id="syncStatus" class="hint">${esc(this.syncStatusText())}</div>
-    <p class="hint" style="margin-top:8px">
-      设备标识：<b>${esc(s.dev || "（首次同步时自动生成）")}</b><br>
-      已同步版本号：<b>${s.lastRev || 0}</b>　待上传：<b>${s.queue.length}</b> 条
-    </p>
-  </div>`);
-};
-
-UI.syncStatusText = function(){
-  if(!Sync.on()) return "当前未开启同步，记录只在本机。";
-  if(Sync.lastError) return "上次同步失败：" + Sync.lastError;
-  if(!store.sync.lastSync) return "已配置，还没同步过。";
-  const d = new Date(store.sync.lastSync);
-  return "上次同步：" + d.toLocaleString("zh-CN");
-};
-
-UI.fillRandomCode = function(){
-  const el = document.getElementById("syncCode");
-  if(el) el.value = Sync.newCode();
-};
-
-UI.saveSync = function(){
-  const urlEl = document.getElementById("syncUrl");
-  const codeEl = document.getElementById("syncCode");
-  const url = (urlEl ? urlEl.value : "").trim().replace(/\/+$/, "");
-  const code = (codeEl ? codeEl.value : "").trim();
-  if(!/^https?:\/\/.+/.test(url)){ alert("服务器地址要以 http:// 或 https:// 开头"); return; }
-  if(!/^[A-Za-z0-9_-]{6,64}$/.test(code)){ alert("同步码要 6-64 位，只能用字母、数字、下划线、短横线"); return; }
-  const changed = (store.sync.code && store.sync.code !== code) || (store.sync.url && store.sync.url !== url);
-  store.sync.url = url;
-  store.sync.code = code;
-  store.sync.lastRev = changed ? 0 : store.sync.lastRev;
-  if(changed) store.sync.backfilledFor = "";
-  Sync.ensureDev();
-  const n = Sync.backfill();
-  persist();
-  Sync.start();
-  UI.home();
-  if(n) alert("已把本机已有的 " + n + " 条作答记录加入待上传队列，同步后其他设备就能看到。");
-  Sync.sync(true);
-};
-
-UI.quitSync = function(){
-  if(!confirm("关闭后本机不再上传，已有记录保留在本地。确定？")) return;
-  Sync.stop();
-  store.sync.url = "";
-  store.sync.code = "";
-  store.sync.queue = [];
-  persist();
-  UI.home();
-  UI.renderSyncStatus();
-};
-
-UI.renderSyncStatus = function(){
-  Sync.renderStatus();
-};
-
 /* ---------------- theme ---------------- */
 function applyTheme(){
   const night = store.theme === "night";
@@ -991,15 +729,6 @@ document.addEventListener("keydown", e=>{
 applyTheme();
 renderTabs();
 UI.home();
-Sync.renderStatus();
-if(Sync.on()){
-  Sync.start();
-  Sync.sync();               // pull whatever the other device did while we were away
-  document.addEventListener("visibilitychange", () => {
-    if(document.visibilityState === "visible" && Sync.on()) Sync.sync();
-  });
-  window.addEventListener("online", () => { if(Sync.on() && store.sync.queue.length) Sync.sync(); });
-}
 </script>
 </body>
 </html>
