@@ -248,7 +248,6 @@ UI.switchBank = function(k){
   Study.mode = null;
   renderTabs();
   UI.home();
-  window.scrollTo({top:0, behavior:"smooth"});
 };
 
 function renderStats(){
@@ -272,8 +271,6 @@ UI.home = function(){
   const done = b.filter(q => (store.db[qId(q)]||{}).a).length;
   document.querySelector("#homePane h2.s").textContent =
     `开始刷题 · 当前题库：${TYPE_LABEL[curBank]}（已练 ${done}/${b.length}）`;
-  document.querySelector("#homePane").scrollIntoView({block:"nearest"});
-  document.querySelector("#homePane").scrollIntoView({block:"nearest"});
 };
 
 /* ---------------- helpers ---------------- */
@@ -286,16 +283,16 @@ function shuffle(a){
   return a;
 }
 function pane(){ return document.getElementById("mainPane"); }
-/* keepScroll=true 用于“同一道题重新渲染”（提交答案、查看答案），
-   这样页面不会跳回顶部；切换到新题目时才回到顶部。 */
-function showMain(html, keepScroll){
+/* 任何渲染都保持当前滚动位置，不再自动回到顶部。
+   内容变短时由浏览器自动收敛到页尾，不需要额外处理。 */
+function showMain(html){
   const y = window.pageYOffset || document.documentElement.scrollTop || 0;
   document.getElementById("homePane").hidden = true;
   const p = pane(); p.hidden = false; p.innerHTML = html;
-  if(keepScroll){
-    window.scrollTo(0, y);
-  }else{
-    window.scrollTo({top:0, behavior:"smooth"});
+  window.scrollTo(0, y);
+  // 部分移动端浏览器要等一帧才完成布局，再补一次
+  if(typeof requestAnimationFrame === "function"){
+    requestAnimationFrame(() => window.scrollTo(0, y));
   }
 }
 function normalize(s){
@@ -325,7 +322,7 @@ const Study = {
     this.render();
   },
 
-  render(keepScroll){
+  render(){
     if(!this.queue.length){ showMain(`<div class="empty">暂无题目</div>`); return; }
     if(this.pos >= this.queue.length){
       const total = this.queue.length;
@@ -414,7 +411,7 @@ const Study = {
         <button class="btn" onclick="Study.jump()">跳转</button>
         <button class="btn ghost" onclick="UI.home()">退出</button>
       </div>
-    </div>`, keepScroll);
+    </div>`);
   },
 
   go(d){
@@ -451,7 +448,7 @@ const Study = {
     if(noKey){
       // practice items carry no answer key in the source material: ask for self-assessment
       this.revealed = true;
-      this.render(true);
+      this.render();
       return;
     }
     const correct = this.picked.slice().sort().join("") === q.a.split("").sort().join("");
@@ -459,7 +456,7 @@ const Study = {
   },
   reveal(){
     this.revealed = true;
-    this.render(true);
+    this.render();
   },
   selfJudge(ok){
     const q = this.queue[this.pos];
@@ -469,7 +466,7 @@ const Study = {
     recordAnswer(q, correct, this.picked.join(""));
     this.revealed = true;
     this.judged = true;
-    this.render(true);
+    this.render();
   },
   feedback(q){
     const noKey = !q.a || (Array.isArray(q.a) && !q.a.length) || q.t === "quiz";
@@ -528,7 +525,7 @@ const Exam = {
     this.pos = 0; this.picked = []; this.done = false;
     this.render();
   },
-  render(keepScroll){
+  render(){
     if(!this.list.length){ UI.home(); return; }
     if(this.pos >= this.list.length) return this.result();
     const {q} = this.list[this.pos];
@@ -554,14 +551,14 @@ const Exam = {
         <span class="grow"></span>
         <button class="btn ghost" onclick="if(confirm('确定退出考试？'))UI.home()">退出</button>
       </div>
-    </div>`, keepScroll);
+    </div>`);
   },
   pick(L){
     const {q} = this.list[this.pos];
     if(q.t === "multi"){
       this.picked = this.picked.includes(L) ? this.picked.filter(x=>x!==L) : [...this.picked,L].sort();
     }else this.picked = [L];
-    this.render(true);
+    this.render();
   },
   go(d){
     this.list[this.pos].picked = this.picked.slice();
